@@ -56,10 +56,12 @@ func newPostPolicyBytesV4WithContentRange(credential, bucketName, objectKey stri
 	credentialConditionStr := fmt.Sprintf(`["eq", "$x-amz-credential", "%s"]`, credential)
 	// Add the meta-uuid string, set to 1234
 	uuidConditionStr := fmt.Sprintf(`["eq", "$x-amz-meta-uuid", "%s"]`, "1234")
+	// Add the content-encoding string, set to gzip.
+	contentEncodingConditionStr := fmt.Sprintf(`["eq", "$content-encoding", "%s"]`, "gzip")
 
 	// Combine all conditions into one string.
-	conditionStr := fmt.Sprintf(`"conditions":[%s, %s, %s, %s, %s, %s, %s]`, bucketConditionStr,
-		keyConditionStr, contentLengthCondStr, algorithmConditionStr, dateConditionStr, credentialConditionStr, uuidConditionStr)
+	conditionStr := fmt.Sprintf(`"conditions":[%s, %s, %s, %s, %s, %s, %s, %s]`, bucketConditionStr,
+		keyConditionStr, contentLengthCondStr, algorithmConditionStr, dateConditionStr, credentialConditionStr, uuidConditionStr, contentEncodingConditionStr)
 	retStr := "{"
 	retStr = retStr + expirationStr + ","
 	retStr += conditionStr
@@ -85,9 +87,11 @@ func newPostPolicyBytesV4(credential, bucketName, objectKey string, expiration t
 	credentialConditionStr := fmt.Sprintf(`["eq", "$x-amz-credential", "%s"]`, credential)
 	// Add the meta-uuid string, set to 1234
 	uuidConditionStr := fmt.Sprintf(`["eq", "$x-amz-meta-uuid", "%s"]`, "1234")
+	// Add the content-encoding string, set to gzip
+	contentEncodingConditionStr := fmt.Sprintf(`["eq", "$content-encoding", "%s"]`, "gzip")
 
 	// Combine all conditions into one string.
-	conditionStr := fmt.Sprintf(`"conditions":[%s, %s, %s, %s, %s, %s]`, bucketConditionStr, keyConditionStr, algorithmConditionStr, dateConditionStr, credentialConditionStr, uuidConditionStr)
+	conditionStr := fmt.Sprintf(`"conditions":[%s, %s, %s, %s, %s, %s, %s]`, bucketConditionStr, keyConditionStr, algorithmConditionStr, dateConditionStr, credentialConditionStr, uuidConditionStr, contentEncodingConditionStr)
 	retStr := "{"
 	retStr = retStr + expirationStr + ","
 	retStr += conditionStr
@@ -152,7 +156,7 @@ func testPostPolicyReservedBucketExploit(obj ObjectLayer, instanceType string, d
 	req.Header.Set("Content-Type", contentTypeHdr)
 	req.Header.Set("User-Agent", "Mozilla")
 
-	// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+	// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 	// Call the ServeHTTP to execute the handler.
 	apiRouter.ServeHTTP(rec, req)
 
@@ -164,7 +168,7 @@ func testPostPolicyReservedBucketExploit(obj ObjectLayer, instanceType string, d
 	z := obj.(*erasureServerPools)
 	xl := z.serverPools[0].sets[0]
 	erasureDisks := xl.getDisks()
-	parts, errs := readAllFileInfo(ctx, erasureDisks, bucketName, objectName+"/upload.txt", "", false, false)
+	parts, errs := readAllFileInfo(ctx, erasureDisks, "", bucketName, objectName+"/upload.txt", "", false, false)
 	for i := range parts {
 		if errs[i] == nil {
 			if parts[i].Name == objectName+"/upload.txt" {
@@ -210,26 +214,31 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 	// Test cases for signature-V2.
 	testCasesV2 := []struct {
 		expectedStatus int
-		accessKey      string
 		secretKey      string
+		formData       map[string]string
 	}{
-		{http.StatusForbidden, "invalidaccesskey", credentials.SecretKey},
-		{http.StatusForbidden, credentials.AccessKey, "invalidsecretkey"},
-		{http.StatusNoContent, credentials.AccessKey, credentials.SecretKey},
+		{http.StatusForbidden, credentials.SecretKey, map[string]string{"AWSAccessKeyId": "invalidaccesskey"}},
+		{http.StatusForbidden, "invalidsecretkey", map[string]string{"AWSAccessKeyId": credentials.AccessKey}},
+		{http.StatusNoContent, credentials.SecretKey, map[string]string{"AWSAccessKeyId": credentials.AccessKey}},
+		{http.StatusForbidden, credentials.SecretKey, map[string]string{"Awsaccesskeyid": "invalidaccesskey"}},
+		{http.StatusForbidden, "invalidsecretkey", map[string]string{"Awsaccesskeyid": credentials.AccessKey}},
+		{http.StatusNoContent, credentials.SecretKey, map[string]string{"Awsaccesskeyid": credentials.AccessKey}},
+		// Forbidden with key not in policy.conditions for signed requests V2.
+		{http.StatusForbidden, credentials.SecretKey, map[string]string{"Awsaccesskeyid": credentials.AccessKey, "AnotherKey": "AnotherContent"}},
 	}
 
 	for i, test := range testCasesV2 {
 		// initialize HTTP NewRecorder, this records any mutations to response writer inside the handler.
 		rec := httptest.NewRecorder()
-		req, perr := newPostRequestV2("", bucketName, "testobject", test.accessKey, test.secretKey)
+		req, perr := newPostRequestV2("", bucketName, "testobject", test.secretKey, test.formData)
 		if perr != nil {
 			t.Fatalf("Test %d: %s: Failed to create HTTP request for PostPolicyHandler: <ERROR> %v", i+1, instanceType, perr)
 		}
-		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 		// Call the ServeHTTP to execute the handler.
 		apiRouter.ServeHTTP(rec, req)
 		if rec.Code != test.expectedStatus {
-			t.Fatalf("Test %d: %s: Expected the response status to be `%d`, but instead found `%d`", i+1, instanceType, test.expectedStatus, rec.Code)
+			t.Fatalf("Test %d: %s: Expected the response status to be `%d`, but instead found `%d`, Resp: %s", i+1, instanceType, test.expectedStatus, rec.Code, rec.Body)
 		}
 	}
 
@@ -284,7 +293,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 			// Change the request body.
 			req.Body = io.NopCloser(bytes.NewReader([]byte("Hello,")))
 		}
-		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 		// Call the ServeHTTP to execute the handler.
 		apiRouter.ServeHTTP(rec, req)
 		if rec.Code != testCase.expectedRespStatus {
@@ -326,7 +335,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 			accessKey:          credentials.AccessKey,
 			secretKey:          credentials.SecretKey,
 			dates:              []interface{}{curTimePlus5Min.Format(iso8601TimeFormat), curTime.Format(iso8601DateFormat), curTime.Format(yyyymmdd)},
-			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"]]}`,
+			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"],["eq", "$content-encoding", "gzip"]]}`,
 		},
 		// Success case, no multipart filename.
 		{
@@ -336,7 +345,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 			accessKey:          credentials.AccessKey,
 			secretKey:          credentials.SecretKey,
 			dates:              []interface{}{curTimePlus5Min.Format(iso8601TimeFormat), curTime.Format(iso8601DateFormat), curTime.Format(yyyymmdd)},
-			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"]]}`,
+			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"],["eq", "$content-encoding", "gzip"]]}`,
 			noFilename:         true,
 		},
 		// Success case, big body.
@@ -347,7 +356,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 			accessKey:          credentials.AccessKey,
 			secretKey:          credentials.SecretKey,
 			dates:              []interface{}{curTimePlus5Min.Format(iso8601TimeFormat), curTime.Format(iso8601DateFormat), curTime.Format(yyyymmdd)},
-			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"]]}`,
+			policy:             `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], ["starts-with", "$key", "test/"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$x-amz-meta-uuid", "1234"],["eq", "$content-encoding", "gzip"]]}`,
 		},
 		// Corrupted Base 64 result
 		{
@@ -415,7 +424,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 		if perr != nil {
 			t.Fatalf("Test %d: %s: Failed to create HTTP request for PostPolicyHandler: <ERROR> %v", i+1, instanceType, perr)
 		}
-		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 		// Call the ServeHTTP to execute the handler.
 		apiRouter.ServeHTTP(rec, req)
 		if rec.Code != testCase.expectedRespStatus {
@@ -442,7 +451,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 			malformedBody:       false,
 			ignoreContentLength: false,
 		},
-		// Failed with Content-Length not specified.
+		// Success with Content-Length not specified.
 		{
 			objectName:          "test",
 			data:                bytes.Repeat([]byte("a"), 1025),
@@ -487,7 +496,7 @@ func testPostPolicyBucketHandler(obj ObjectLayer, instanceType string, t TestErr
 		if perr != nil {
 			t.Fatalf("Test %d: %s: Failed to create HTTP request for PostPolicyHandler: <ERROR> %v", i+1, instanceType, perr)
 		}
-		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+		// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 		// Call the ServeHTTP to execute the handler.
 		apiRouter.ServeHTTP(rec, req)
 		if rec.Code != testCase.expectedRespStatus {
@@ -542,7 +551,7 @@ func testPostPolicyBucketHandlerRedirect(obj ObjectLayer, instanceType string, t
 	rec := httptest.NewRecorder()
 
 	dates := []interface{}{curTimePlus5Min.Format(iso8601TimeFormat), curTime.Format(iso8601DateFormat), curTime.Format(yyyymmdd)}
-	policy := `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], {"success_action_redirect":"` + redirectURL.String() + `"},["starts-with", "$key", "test/"], ["eq", "$x-amz-meta-uuid", "1234"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"]]}`
+	policy := `{"expiration": "%s","conditions":[["eq", "$bucket", "` + bucketName + `"], {"success_action_redirect":"` + redirectURL.String() + `"},["starts-with", "$key", "test/"], ["eq", "$x-amz-meta-uuid", "1234"], ["eq", "$x-amz-algorithm", "AWS4-HMAC-SHA256"], ["eq", "$x-amz-date", "%s"], ["eq", "$x-amz-credential", "` + credentials.AccessKey + `/%s/us-east-1/s3/aws4_request"],["eq", "$content-encoding", "gzip"]]}`
 
 	// Generate the final policy document
 	policy = fmt.Sprintf(policy, dates...)
@@ -556,7 +565,7 @@ func testPostPolicyBucketHandlerRedirect(obj ObjectLayer, instanceType string, t
 	if perr != nil {
 		t.Fatalf("%s: Failed to create HTTP request for PostPolicyHandler: <ERROR> %v", instanceType, perr)
 	}
-	// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic ofthe handler.
+	// Since `apiRouter` satisfies `http.Handler` it has a ServeHTTP to execute the logic of the handler.
 	// Call the ServeHTTP to execute the handler.
 	apiRouter.ServeHTTP(rec, req)
 
@@ -593,7 +602,7 @@ func postPresignSignatureV4(policyBase64 string, t time.Time, secretAccessKey, l
 	return signature
 }
 
-func newPostRequestV2(endPoint, bucketName, objectName string, accessKey, secretKey string) (*http.Request, error) {
+func newPostRequestV2(endPoint, bucketName, objectName string, secretKey string, formInputData map[string]string) (*http.Request, error) {
 	// Expire the request five minutes from now.
 	expirationTime := UTCNow().Add(time.Minute * 5)
 	// Create a new post policy.
@@ -605,13 +614,14 @@ func newPostRequestV2(endPoint, bucketName, objectName string, accessKey, secret
 	signature := calculateSignatureV2(encodedPolicy, secretKey)
 
 	formData := map[string]string{
-		"AWSAccessKeyId":              accessKey,
-		"bucket":                      bucketName,
-		"key":                         objectName + "/${filename}",
-		"policy":                      encodedPolicy,
-		"signature":                   signature,
-		"X-Amz-Ignore-signature":      "",
-		"X-Amz-Ignore-AWSAccessKeyId": "",
+		"bucket":    bucketName,
+		"key":       objectName + "/${filename}",
+		"policy":    encodedPolicy,
+		"signature": signature,
+	}
+
+	for key, value := range formInputData {
+		formData[key] = value
 	}
 
 	// Create the multipart form.

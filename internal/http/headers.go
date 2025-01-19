@@ -118,7 +118,7 @@ const (
 	// Dummy putBucketACL
 	AmzACL = "x-amz-acl"
 
-	// Signature V4 related contants.
+	// Signature V4 related constants.
 	AmzContentSha256        = "X-Amz-Content-Sha256"
 	AmzDate                 = "X-Amz-Date"
 	AmzAlgorithm            = "X-Amz-Algorithm"
@@ -177,6 +177,10 @@ const (
 	AmzChecksumSHA256 = "x-amz-checksum-sha256"
 	AmzChecksumMode   = "x-amz-checksum-mode"
 
+	// Post Policy related
+	AmzMetaUUID = "X-Amz-Meta-Uuid"
+	AmzMetaName = "X-Amz-Meta-Name"
+
 	// Delete special flag to force delete a bucket or a prefix
 	MinIOForceDelete = "x-minio-force-delete"
 
@@ -191,6 +195,9 @@ const (
 
 	// Writes expected write quorum
 	MinIOWriteQuorum = "x-minio-write-quorum"
+
+	// Reads expected read quorum
+	MinIOReadQuorum = "x-minio-read-quorum"
 
 	// Indicates if we are using default storage class and there was problem loading config
 	// if this header is set to "true"
@@ -227,6 +234,13 @@ const (
 	MinIOSourceObjectRetentionTimestamp = "X-Minio-Source-Replication-Retention-Timestamp"
 	// Header indiicates last rtention update time on source
 	MinIOSourceObjectLegalHoldTimestamp = "X-Minio-Source-Replication-LegalHold-Timestamp"
+	// Header indicates a Tag operation was performed on one/more peers successfully, though the
+	// current cluster does not have the object yet. This is in a site/bucket replication scenario.
+	MinIOTaggingProxied = "X-Minio-Tagging-Proxied"
+	// Header indicates the actual replicated object size
+	// In case of SSEC objects getting replicated (multipart) actual size would be needed at target
+	MinIOReplicationActualObjectSize = "X-Minio-Replication-Actual-Object-Size"
+
 	// predicted date/time of transition
 	MinIOTransition            = "X-Minio-Transition"
 	MinIOLifecycleCfgUpdatedAt = "X-Minio-LifecycleConfig-UpdatedAt"
@@ -249,5 +263,6 @@ const (
 // http headers sent to webhook targets
 const (
 	// Reports the version of MinIO server
-	MinIOVersion = "x-minio-version"
+	MinIOVersion             = "x-minio-version"
+	WebhookEventPayloadCount = "x-minio-webhook-payload-count"
 )
